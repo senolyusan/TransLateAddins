@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 using Office = Microsoft.Office.Core;
 namespace TranslateAddins
 {
-    public partial class Ribbon1
+    public partial class Addins_Ribbon
     {
         public AddinUserControl addinTaskPanelControl;
         public Microsoft.Office.Tools.CustomTaskPane AddincustomTaskPane;        

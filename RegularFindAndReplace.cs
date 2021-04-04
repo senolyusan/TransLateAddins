@@ -200,7 +200,7 @@ namespace TranslateAddins
         /// <param name="e"></param>
         private void CheckedListBox1_MouseMove(object sender, MouseEventArgs e)
         {
-            int i, heightsum;
+            int i;
             for (i = 0; i < chkdLstBoxHeight.Count; i++)
             {
                 if (e.Y < chkdLstBoxHeight[i])
