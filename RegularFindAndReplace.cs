@@ -10,9 +10,117 @@ using System.Text.RegularExpressions;
 using Word = Microsoft.Office.Interop.Word;
 namespace TranslateAddins
 {
+    /// <summary>
+    /// 段落数据结构体
+    /// </summary>
+    struct paragraphData
+    {
+        int paragraphIndex;
+        string paragraphText;
+        int paragraphStart;
+        int paragraphEnd;
+        int textStart;
+        int textEnd;
+
+        public paragraphData(Word.Paragraph paragraph, int id)
+        {
+            paragraphIndex = id;
+            paragraphEnd = paragraph.Range.End;
+            paragraphStart = paragraph.Range.Start;
+            paragraphText = paragraph.Range.Text;
+            try
+            {
+                textStart = paragraph.Range.Document.Range(0, paragraph.Range.Start).Text.Length;
+            }
+            catch (Exception)
+            {
+                textStart = 0;
+            }
+            textEnd = paragraph.Range.Text.Length + textStart;
+        }
+        public int Index { get { return paragraphIndex; } }
+        public string Text { get { return paragraphText; } }
+        public int RangeStart { get { return paragraphStart; } }
+        public int RangeEnd { get { return paragraphEnd; } }
+        public int TextStart { get { return textStart; } }
+        public int TextEnd { get { return textEnd; } }
+        public int RangeLength { get { return RangeEnd - RangeStart; } }
+        public int TextLength { get { return textEnd - TextStart; } }
+    }
+    /// <summary>
+    /// 匹配结果数据结构体
+    /// </summary>
+    struct matchData
+    {
+        private int mIndex;
+        private string txt;
+        public Word.Range rng { get; }
+        private int textStart;
+        private int textEnd;
+        private int rangeStart;
+        private int rangeEnd;
+        public matchData(int index, string text)
+        {
+            mIndex = index;
+            txt = text;
+            rng = null;
+            textStart = 0;
+            textEnd = 0;
+            rangeStart = 0;
+            rangeEnd = 0;
+        }
+        public matchData(int index, Word.Range range)
+        {
+            mIndex = index;
+            txt = range.Text;
+            rng = range;
+            textStart = 0;
+            textEnd = 0;
+            rangeStart = range.Start;
+            rangeEnd = range.End;
+        }
+        public matchData(int index, string text, int start, int end)
+        {
+            mIndex = index;
+            txt = text;
+            rng = null;
+            textStart = start;
+            textEnd = end;
+            rangeStart = 0;
+            rangeEnd = 0;
+        }
+        public int Index
+        {
+            get { return mIndex; }
+        }
+        public int RangeStart
+        {
+            get { return rangeStart; }
+            set
+            {
+                rangeStart = value;
+            }
+        }
+        public int RangeEnd
+        {
+            get { return rangeEnd; }
+            set
+            {
+
+                rangeEnd = value;
+            }
+
+        }
+        public String Text { get { return txt; } }
+        public int TextStart { get { return textStart; }set {textStart = value; } }
+        public int TextEnd { get { return textEnd; } set { textEnd = value; } }
+        public bool GetSearchOK()
+        { return (rng != null) && (rng.Text == txt); }
+    }
     public partial class RegularFindAndReplace : UserControl
     {
-
+        List<long> rangeCollection = new List<long>();
+        List<long> textCollection = new List<long>();
         private DataGridViewTextBoxColumn ResultList = new DataGridViewTextBoxColumn
         {
 
@@ -39,6 +147,9 @@ namespace TranslateAddins
         List<int> chkdLstBoxHeight = new List<int>();
         List<string> tltipArr = new List<string>();
         List<Word.Range> ranges = new List<Word.Range>();
+
+        List<matchData> matchDatas = new List<matchData>();
+
         MatchCollection matchCollection;
         /// <summary>
         /// dataGridView控件初始化
@@ -184,7 +295,7 @@ namespace TranslateAddins
                 RegexOptions options1 = RegexOptions.None;
                 if (c.CheckedIndices.Contains(i))
                 {
-                    options1 = (RegexOptions)Enum.Parse(typeof(RegexOptions), s.GetValue(i+1).ToString(), true);
+                    options1 = (RegexOptions)Enum.Parse(typeof(RegexOptions), s.GetValue(i + 1).ToString(), true);
                 }
                 regexOptions |= options1;
             }
@@ -222,7 +333,7 @@ namespace TranslateAddins
         public void tabSelect(int index)
         {
             tabControl_RegularFindAndReplace.SelectedIndex = (index < tabControl_RegularFindAndReplace.TabCount || index >= 0) ? index : tabControl_RegularFindAndReplace.SelectedIndex;
-            tabControl_RegularFindAndReplace_SelectedIndexChanged(null,null);
+            tabControl_RegularFindAndReplace_SelectedIndexChanged(null, null);
         }
         /// <summary>
         /// 文本框内容发生变化事件
@@ -292,7 +403,6 @@ namespace TranslateAddins
         /// <param name="e"></param>
         private void tabPage_Find_Click(object sender, EventArgs e)
         {
-
         }
         /// <summary>
         /// 分隔符移动事件
@@ -325,7 +435,6 @@ namespace TranslateAddins
                     RTB_Find1.Height = splitContainer1.Panel1.Height - 10 - btn_Find.Height;
                 }
                 btn_Find.Top = RTB_Find1.Bottom + 3;
-
                 btn_Find.Left = splitContainer1.Panel1.Width - 10 - btn_Find.Width;
                 RTB_Find1.AutoScrollOffset = new Point(0, 0);
 
@@ -348,10 +457,9 @@ namespace TranslateAddins
                 label_ReplaceTo.Top = RTB_Find2.Bottom + 3;
                 RTB_replace.Top = label_ReplaceTo.Bottom + 3;
 
-                
                 btn_ReplaceAll.Left = splitContainer1.Panel2.Width - 10 - btn_ReplaceAll.Width;
                 btn_Replace_ListOut.Left = btn_ReplaceAll.Left - 3 - btn_Replace_ListOut.Width;
-                
+
                 btn_ReplaceAll.Top = RTB_replace.Bottom + 3;
                 btn_Replace_ListOut.Top = RTB_replace.Bottom + 3;
 
@@ -425,31 +533,173 @@ namespace TranslateAddins
         {
             Word.Document document = Globals.ThisAddIn.Application.ActiveDocument;
             Word.Range range = document.Range();
-             matchCollection = RegularFind(RTB_Find2.Text, range.Text, regexOptions);
+            List<paragraphData> paragraphDatas = new List<paragraphData>();
+            int paragraphId = 0;
+            foreach (Word.Paragraph prgrph in document.Paragraphs)
+            {
+                paragraphDatas.Add(new paragraphData(prgrph, ++paragraphId));
+            }
+            matchCollection = RegularFind(RTB_Find2.Text, range.Text, regexOptions);
             dataGridView_ResultList.Rows.Clear();
             ranges.Clear();
             foreach (Match m in matchCollection)
+            {   
+                int mIndex = m.Index, mLength = m.Length, flag = 0;
+                foreach(paragraphData prgrph in paragraphDatas)
+                {
+                    int minStart=0, maxEnd=0;
+                    if (mIndex > prgrph.TextStart && mIndex <= prgrph.TextEnd)
+                    {
+                        //段内匹配
+                        if (prgrph.TextLength == prgrph.RangeLength)
+                        {
+                            //纯文本段落
+                            minStart = mIndex + prgrph.RangeStart - prgrph.TextStart;
+                            maxEnd = minStart + mLength;                            
+                            matchDatas.Add(new matchData(matchDatas.Count, document.Range(minStart, maxEnd)));
+                            break;
+
+                        }
+                        else
+                        {
+                            //非纯文本段落
+                            
+                            minStart = mIndex + prgrph.RangeStart - prgrph.TextStart;
+                            maxEnd = prgrph.RangeEnd - (prgrph.TextEnd - (mIndex + mLength));
+                            matchDatas.Add(new matchData(matchDatas.Count, m.Value, minStart, maxEnd));
+                            break;                            
+                        }
+                    }
+                    else
+                    {
+                        //跨段匹配
+                        //匹配结果前部                        
+                        if (mIndex>=prgrph.TextStart && mIndex <= prgrph.TextEnd)
+                        {
+                            minStart = mIndex + prgrph.RangeStart - prgrph.TextStart;
+                            flag |= 0x1;
+                        }
+                        if(mIndex+mLength>=prgrph.TextStart&& mIndex + mLength <= prgrph.TextEnd)
+                        {
+                            maxEnd = prgrph.RangeEnd - prgrph.TextEnd + mIndex + mLength;
+                            flag |= 0x2;
+                        }
+                        if((flag & 0x3) == 0x3)
+                        {
+                            matchDatas.Add(new matchData(matchDatas.Count, m.Value, minStart, maxEnd));
+                            break;
+                        }
+                    }
+                }
+            }
+            ///对未能匹配纯文本段落的匹配项进行处理
+            for (int i = 0; i < matchDatas.Count; i++)
             {
-                Word.Range rng = document.Range(m.Index, m.Index + m.Length);
-                Word.Range rngExpand = document.Range(m.Index, m.Index + m.Length);
+                if (matchDatas[i].GetSearchOK() == false)
+                {
+                    matchData match = matchDatas[i];
+                    match.TextStart = GetMatchDataStart(matchDatas[i], document);
+                    match.TextEnd = GetMatchDataEnd(matchDatas[i], document);
+                    match = new matchData(match.Index, document.Range(match.TextStart, match.TextEnd));
+                    matchDatas.RemoveAt(match.Index);
+                    matchDatas.Insert(match.Index, match);
+                }
+            }
+            foreach(matchData mth in matchDatas)
+            {
+                Word.Range rng = mth.rng;
+                Word.Range rngExpand = document.Range(mth.RangeStart,mth.RangeEnd);
                 Word.WdUnits wd = Word.WdUnits.wdSentence;
-                if(m.Length<10)                rngExpand.Expand(wd);
+                if (mth.Text.Length < 10) rngExpand.Expand(wd);
                 if (rng.Start - rngExpand.Start > 10)
                 {
                     rngExpand.Start = rng.Start - 10;
                 }
                 ranges.Add(rng);
-                dataGridView_ResultList.Rows.Add(rngExpand.Text, rng, m.Result(replaceText));
+                dataGridView_ResultList.Rows.Add(rngExpand.Text, rng, matchCollection[mth.Index].Result(replaceText));
+            }
 
+        }
+        /// <summary>
+        /// 递归进行最大开始字符匹配
+        /// </summary>
+        /// <param name="match"></param>
+        /// <param name="document"></param>
+        /// <returns></returns>
+        private int GetMatchDataStart(matchData match,Word.Document document)
+        {
+            return GetMatchDataStart(match, match.TextStart, match.TextEnd, document, match.TextEnd);
+        }
+        private int GetMatchDataStart(matchData match, int start1, int start2, Word.Document document, int endl)
+        {
+            if (start2 - start1 > 1)
+            {
+                if (document.Range((start1 + start2) / 2 + 1, start2).Text.Contains(match.Text))
+                {
+                    return GetMatchDataStart(match, (start1 + start2) / 2 + 1, start2, document, endl);
+                }
+                else
+                {
+                    return GetMatchDataStart(match, start1, (start1 + start2) / 2, document, endl);
+                }
+            }
+            else
+            {
+                if (document.Range(start2, endl).Text.Contains(match.Text))
+                {
+                    return start2;
+                }
+                else
+                {
+                    return start1;
+                }
             }
         }
+        /// <summary>
+        /// 递归进行最小结束字符匹配
+        /// </summary>
+        /// <param name="match"></param>
+        /// <param name="document"></param>
+        /// <returns></returns>
+        private int GetMatchDataEnd(matchData match, Word.Document document)
+        {
+            return GetMatchDataEnd(match,  match.TextStart, match.TextEnd, document,match.TextStart);
+        }
+        private int GetMatchDataEnd(matchData match, int end1, int end2, Word.Document document, int startl)
+        {
+            if (end2 - end1 > 1)
+            {
+                if (document.Range(startl,(end1 + end2) / 2 ).Text.Contains(match.Text))
+                {
+                    return GetMatchDataEnd(match, end1, (end1 + end2) / 2, document, startl);
+                }
+                else
+                {
+                    return GetMatchDataEnd(match, (end1 + end2) / 2+1,end2, document, startl);
+                }
+            }
+            else
+            {
+                if (document.Range(startl, end1).Text.Contains(match.Text))
+                {
+                    return end1;
+                }
+                else
+                {
+                    return end2;
+                }
+            }
 
+
+        }
         private void RegularFind(object sender)
         {
-
+            RegularReplace(sender, "");
+            return;
+/*
             Word.Document document = Globals.ThisAddIn.Application.ActiveDocument;
             Microsoft.Office.Interop.Word.Range range = document.Range();
-             matchCollection = RegularFind(RTB_Find1.Text, range.Text, regexOptions);
+            matchCollection = RegularFind(RTB_Find1.Text, range.Text, regexOptions);
             dataGridView_ResultList.Rows.Clear();
             ranges.Clear();
             foreach (Match m in matchCollection)
@@ -464,7 +714,7 @@ namespace TranslateAddins
                 }
                 ranges.Add(rng);
                 dataGridView_ResultList.Rows.Add(rngExpand.Text, rng);
-            }
+            }*/
         }
         /// <summary>
         /// 查找按钮
@@ -500,13 +750,13 @@ namespace TranslateAddins
                             ParagraphsCount_Old = range.Paragraphs.Count;
                             replaceOne(range, dataGridView_ResultList.Rows[e.RowIndex].Cells["ReplaceTo"].Value as string);
                             ParagraphsCount_New = range.Paragraphs.Count;
-                            if (ParagraphsCount_New>1 || ParagraphsCount_Old>1)
+                            if (ParagraphsCount_New > 1 || ParagraphsCount_Old > 1)
                             {
                                 /**
                                  * 跨越多个段的替换操作会对暂存的结果造成影响，导致后续替换出错，因此这里对后续进行无效化处理。
                                  * 
                                  **/
-                                for(int i = e.RowIndex; i < ranges.Count; i++)
+                                for (int i = e.RowIndex; i < ranges.Count; i++)
                                 {
                                     ranges.RemoveAt(i);
                                     dataGridView_ResultList.Rows.RemoveAt(i);
@@ -517,7 +767,7 @@ namespace TranslateAddins
                                 dataGridView_ResultList.Rows.RemoveAt(e.RowIndex);
                                 ranges.RemoveAt(e.RowIndex);
                             }
-                            dataGridView_ResultList.Refresh();                            
+                            dataGridView_ResultList.Refresh();
                         }
                         break;
                     default:
@@ -563,7 +813,7 @@ namespace TranslateAddins
         private void btn_ReplaceAll_Click(object sender, EventArgs e)
         {
             RegularReplace(sender, RTB_replace.Text);
-            for (int i= ranges.Count-1; i >= 0; --i)
+            for (int i = ranges.Count - 1; i >= 0; --i)
             {
                 ranges[i].Text = dataGridView_ResultList.Rows[i].Cells["ReplaceTo"].Value as string;
                 ranges.RemoveAt(i);
